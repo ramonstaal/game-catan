@@ -7,6 +7,7 @@ const nameQuery = computed(() => String(route.query.name ?? '').trim())
 
 const {
   connectRoom,
+  joinRoom,
   setReady,
   startGame,
   seatedPlayers,
@@ -21,6 +22,8 @@ const {
   hostId,
 } = useP2PGame()
 
+const isInviteJoin = computed(() => Boolean(roomQuery.value && !nameQuery.value))
+
 const localReady = computed({
   get: () => me.value?.isReady ?? false,
   set: (v: boolean) => setReady(v),
@@ -31,23 +34,29 @@ const joinName = ref('')
 function enterLobbyWithName() {
   const n = joinName.value.trim()
   if (!n || !roomQuery.value) return
+  joinRoom(roomQuery.value, n)
   navigateTo({
     path: '/lobby',
     query: { room: roomQuery.value, name: n },
   })
 }
 
-onMounted(() => {
-  if (roomQuery.value && nameQuery.value) {
-    connectRoom(roomQuery.value, nameQuery.value)
+function connectForRoute() {
+  const room = roomQuery.value
+  const name = nameQuery.value
+  if (!room) return
+  if (name) {
+    connectRoom(room, name)
+  } else {
+    connectRoom(room, '')
   }
-})
+}
+
+onMounted(connectForRoute)
 
 watch(
   () => [roomQuery.value, nameQuery.value] as const,
-  ([room, name]) => {
-    if (room && name) connectRoom(room, name)
-  },
+  connectForRoute,
 )
 
 watch([gameStatus, isConnected], ([status, connected]) => {
@@ -85,15 +94,33 @@ function colorVar(color: string | null): string {
       </p>
     </header>
 
-    <section v-if="roomQuery && !nameQuery" class="panel">
-      <h2>Join room {{ roomQuery }}</h2>
-      <p class="join-hint">You were invited to this game. Enter your name to join the lobby.</p>
+    <section v-if="isInviteJoin" class="panel invite-panel">
+      <h2>You're invited</h2>
+      <p class="join-hint">
+        Join room <strong class="room-code">{{ roomQuery }}</strong>
+        — enter your name below.
+      </p>
+
+      <div class="room-locked">
+        <span class="room-locked-label">Room</span>
+        <span class="room-locked-value">{{ roomQuery }}</span>
+      </div>
+
+      <RoomRoster
+        :seated-players="seatedPlayers"
+        :spectators="spectators"
+        :host-id="hostId"
+      />
+
+      <p v-if="!isConnected" class="sync-hint">Connecting to room…</p>
+
       <label class="join-label">
         Your name
         <input
           v-model="joinName"
           type="text"
           placeholder="Player name"
+          autofocus
           @keyup.enter="enterLobbyWithName"
         />
       </label>
@@ -105,7 +132,6 @@ function colorVar(color: string | null): string {
       >
         Join lobby
       </button>
-      <InviteLink :room="roomQuery" />
     </section>
 
     <section v-else-if="roomQuery" class="panel">
@@ -353,5 +379,43 @@ header h1 {
   background: var(--bg);
   color: var(--text);
   font: inherit;
+}
+
+.room-code {
+  color: var(--text);
+}
+
+.room-locked {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.room-locked-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.room-locked-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.sync-hint {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.invite-panel .roster {
+  margin-bottom: 1rem;
 }
 </style>

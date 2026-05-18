@@ -3,10 +3,18 @@ const route = useRoute()
 const room = ref('')
 const name = ref('')
 
-onMounted(() => {
-  const fromLink = String(route.query.room ?? '').trim()
-  if (fromLink) room.value = fromLink
-})
+const inviteRoom = computed(() => String(route.query.room ?? '').trim())
+const isInviteRedirect = computed(() => Boolean(inviteRoom.value))
+
+watch(
+  inviteRoom,
+  (code) => {
+    if (code) {
+      navigateTo({ path: '/lobby', query: { room: code } })
+    }
+  },
+  { immediate: true },
+)
 
 function joinLobby() {
   const r = room.value.trim()
@@ -24,7 +32,7 @@ function randomRoom() {
 </script>
 
 <template>
-  <main class="home">
+  <main v-if="!isInviteRedirect" class="home">
     <h1>Settlers of Catan</h1>
     <p class="subtitle">Serverless P2P multiplayer via WebRTC</p>
 

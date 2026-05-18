@@ -201,7 +201,7 @@ function attachObservers(ydoc: Y.Doc) {
 function ensureJoined() {
   const ydoc = ydocRef.value
   const clientId = clientIdRef.value
-  const name = displayNameRef.value
+  const name = displayNameRef.value.trim()
   if (!ydoc || !clientId || !name) return
 
   ydoc.transact(() => {
@@ -236,7 +236,7 @@ function wireProvider(provider: WebrtcProvider) {
 
   const onSynced = ({ synced }: { synced: boolean }) => {
     syncedRef.value = synced
-    if (synced) ensureJoined()
+    if (synced && displayNameRef.value.trim()) ensureJoined()
   }
 
   const onPeers = ({
@@ -247,7 +247,7 @@ function wireProvider(provider: WebrtcProvider) {
     webrtcPeers: string[]
   }) => {
     peerCountRef.value = webrtcPeers.length
-    if (added.length > 0) ensureJoined()
+    if (added.length > 0 && displayNameRef.value.trim()) ensureJoined()
   }
 
   const onStatus = ({ connected }: { connected: boolean }) => {
@@ -315,12 +315,15 @@ export function useP2PGame() {
 
   const peerCount = computed(() => peerCountRef.value)
 
-  function connectRoom(roomName: string, displayName: string) {
+  const hasJoined = computed(() => Boolean(displayNameRef.value.trim()))
+
+  /** Connect to a room. Omit displayName (or pass "") to preview players without joining. */
+  function connectRoom(roomName: string, displayName = '') {
     if (import.meta.server) return
 
     const trimmedRoom = roomName.trim()
     const trimmedName = displayName.trim()
-    if (!trimmedRoom || !trimmedName) return
+    if (!trimmedRoom) return
 
     const p2pRoomId = normalizeRoomId(trimmedRoom)
 
@@ -330,7 +333,11 @@ export function useP2PGame() {
       providerRef.value
     ) {
       displayNameRef.value = trimmedName
-      ensureJoined()
+      providerRef.value.awareness.setLocalStateField(
+        'name',
+        trimmedName || undefined,
+      )
+      if (trimmedName) ensureJoined()
       return
     }
 
@@ -357,12 +364,17 @@ export function useP2PGame() {
 
     const awareness = provider.awareness
     awareness.setLocalStateField('clientId', clientIdRef.value)
-    awareness.setLocalStateField('name', trimmedName)
+    awareness.setLocalStateField('name', trimmedName || undefined)
     awareness.setLocalStateField('room', trimmedRoom)
 
     wireProvider(provider)
     attachObservers(ydoc)
-    ensureJoined()
+    if (trimmedName) ensureJoined()
+  }
+
+  /** Join a room you are already previewing (or connect fresh with a name). */
+  function joinRoom(roomName: string, displayName: string) {
+    connectRoom(roomName, displayName)
   }
 
   function setReady(ready: boolean) {
@@ -412,6 +424,7 @@ export function useP2PGame() {
 
   return {
     connectRoom,
+    joinRoom,
     disconnect,
     setReady,
     startGame,
@@ -430,5 +443,6 @@ export function useP2PGame() {
     currentTurnIndex,
     isConnected,
     peerCount,
+    hasJoined,
   }
 }

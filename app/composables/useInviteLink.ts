@@ -6,14 +6,14 @@ export function useInviteLink() {
     const code = room.trim()
     if (!code) return ''
 
+    const base = config.app.baseURL || '/'
+    const lobbyPath = `${base.endsWith('/') ? base : `${base}/`}lobby`
+
     if (import.meta.server) {
-      const base = config.app.baseURL || '/'
-      return `${base}?room=${encodeURIComponent(code)}`
+      return `${lobbyPath}?room=${encodeURIComponent(code)}`
     }
 
-    const base = config.app.baseURL || '/'
-    const path = base.endsWith('/') ? base : `${base}/`
-    const url = new URL(path, window.location.origin)
+    const url = new URL(lobbyPath, window.location.origin)
     url.searchParams.set('room', code)
     return url.href
   }
