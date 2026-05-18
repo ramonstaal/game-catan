@@ -1,5 +1,7 @@
 import * as Y from 'yjs'
+import { Awareness } from 'y-protocols/awareness'
 import { WebrtcProvider } from 'y-webrtc'
+import { WebsocketProvider } from 'y-websocket'
 import {
   MAX_SEATS,
   MIN_PLAYERS_TO_START,
@@ -14,7 +16,7 @@ import {
 
 const CLIENT_ID_KEY = 'catan-client-id'
 
-/** Public signaling servers (try several so peers find each other faster). */
+/** Public signaling servers for optional WebRTC mesh. */
 const SIGNALING_URLS = [
   'wss://signaling.yjs.dev',
   'wss://y-webrtc-eu.fly.dev',
@@ -158,12 +160,13 @@ function assignPlayerSlot(
 
 // Singleton connection state shared across pages in the same session
 const ydocRef = shallowRef<Y.Doc | null>(null)
-const providerRef = shallowRef<WebrtcProvider | null>(null)
+const webrtcProviderRef = shallowRef<WebrtcProvider | null>(null)
+const wsProviderRef = shallowRef<WebsocketProvider | null>(null)
 const roomNameRef = ref<string | null>(null)
 const displayNameRef = ref('')
 const clientIdRef = ref('')
 const peerCountRef = ref(0)
-const syncedRef = ref(false)
+const networkReadyRef = ref(false)
 const clientsSnapshot = shallowRef<PlayerRecord[]>([])
 const gameSnapshot = shallowRef<GameRecord>({
   status: 'lobby',
@@ -173,6 +176,14 @@ const gameSnapshot = shallowRef<GameRecord>({
 
 let cleanupObservers: (() => void) | null = null
 let cleanupProviderListeners: (() => void) | null = null
+
+function updateNetworkReady() {
+  const ws = wsProviderRef.value
+  const wsReady = Boolean(ws?.wsconnected && ws.synced)
+  const rtc = webrtcProviderRef.value
+  const rtcReady = Boolean(rtc?.connected)
+  networkReadyRef.value = wsReady || rtcReady
+}
 
 function attachObservers(ydoc: Y.Doc) {
   cleanupObservers?.()
@@ -215,14 +226,16 @@ function disconnect() {
   cleanupObservers?.()
   cleanupObservers = null
 
-  providerRef.value?.destroy()
-  providerRef.value = null
+  webrtcProviderRef.value?.destroy()
+  webrtcProviderRef.value = null
+  wsProviderRef.value?.destroy()
+  wsProviderRef.value = null
   ydocRef.value?.destroy()
   ydocRef.value = null
   roomNameRef.value = null
   displayNameRef.value = ''
   peerCountRef.value = 0
-  syncedRef.value = false
+  networkReadyRef.value = false
   clientsSnapshot.value = []
   gameSnapshot.value = {
     status: 'lobby',
@@ -231,12 +244,11 @@ function disconnect() {
   }
 }
 
-function wireProvider(provider: WebrtcProvider) {
+function wireProviders(webrtc: WebrtcProvider, ws: WebsocketProvider) {
   cleanupProviderListeners?.()
 
-  const onSynced = ({ synced }: { synced: boolean }) => {
-    syncedRef.value = synced
-    if (synced && displayNameRef.value.trim()) ensureJoined()
+  const onWebrtcSynced = ({ synced }: { synced: boolean }) => {
+    if (synced) updateNetworkReady()
   }
 
   const onPeers = ({
@@ -250,22 +262,41 @@ function wireProvider(provider: WebrtcProvider) {
     if (added.length > 0 && displayNameRef.value.trim()) ensureJoined()
   }
 
-  const onStatus = ({ connected }: { connected: boolean }) => {
-    if (!connected) syncedRef.value = false
+  const onWebrtcStatus = ({ connected }: { connected: boolean }) => {
+    if (!connected) peerCountRef.value = 0
+    updateNetworkReady()
   }
 
-  provider.on('synced', onSynced)
-  provider.on('peers', onPeers)
-  provider.on('status', onStatus)
+  const onWsStatus = ({
+    status,
+  }: {
+    status: 'connected' | 'disconnected' | 'connecting'
+  }) => {
+    if (status !== 'connected') networkReadyRef.value = false
+    updateNetworkReady()
+  }
+
+  const onWsSync = (isSynced: boolean) => {
+    if (isSynced) updateNetworkReady()
+  }
+
+  webrtc.on('synced', onWebrtcSynced)
+  webrtc.on('peers', onPeers)
+  webrtc.on('status', onWebrtcStatus)
+  ws.on('status', onWsStatus)
+  ws.on('sync', onWsSync)
 
   cleanupProviderListeners = () => {
-    provider.off('synced', onSynced)
-    provider.off('peers', onPeers)
-    provider.off('status', onStatus)
+    webrtc.off('synced', onWebrtcSynced)
+    webrtc.off('peers', onPeers)
+    webrtc.off('status', onWebrtcStatus)
+    ws.off('status', onWsStatus)
+    ws.off('sync', onWsSync)
   }
 }
 
 export function useP2PGame() {
+  const config = useRuntimeConfig()
   const clientId = computed(() => clientIdRef.value)
 
   const seatedPlayers = computed((): SeatedPlayer[] =>
@@ -309,9 +340,7 @@ export function useP2PGame() {
     () => gameSnapshot.value.currentTurnIndex,
   )
 
-  const isConnected = computed(
-    () => Boolean(providerRef.value?.connected) && syncedRef.value,
-  )
+  const isConnected = computed(() => networkReadyRef.value)
 
   const peerCount = computed(() => peerCountRef.value)
 
@@ -330,13 +359,12 @@ export function useP2PGame() {
     if (
       roomNameRef.value === p2pRoomId &&
       ydocRef.value &&
-      providerRef.value
+      webrtcProviderRef.value &&
+      wsProviderRef.value
     ) {
       displayNameRef.value = trimmedName
-      providerRef.value.awareness.setLocalStateField(
-        'name',
-        trimmedName || undefined,
-      )
+      const awareness = webrtcProviderRef.value.awareness
+      awareness.setLocalStateField('name', trimmedName || undefined)
       if (trimmedName) ensureJoined()
       return
     }
@@ -349,27 +377,44 @@ export function useP2PGame() {
 
     const ydoc = new Y.Doc()
     ydocRef.value = ydoc
+    const awareness = new Awareness(ydoc)
 
-    const provider = new WebrtcProvider(p2pRoomId, ydoc, {
+    const wsUrl = config.public.yjsWsUrl as string
+    const ws = new WebsocketProvider(wsUrl, p2pRoomId, ydoc, {
+      awareness,
+      connect: true,
+    })
+    wsProviderRef.value = ws
+
+    const webrtc = new WebrtcProvider(p2pRoomId, ydoc, {
+      awareness,
       signaling: SIGNALING_URLS,
-      // Same password for everyone in this room code (helps match peers on public signaling).
       password: p2pRoomId,
       peerOpts: {
         config: {
-          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+          ],
         },
       },
     })
-    providerRef.value = provider
+    webrtcProviderRef.value = webrtc
 
-    const awareness = provider.awareness
     awareness.setLocalStateField('clientId', clientIdRef.value)
     awareness.setLocalStateField('name', trimmedName || undefined)
     awareness.setLocalStateField('room', trimmedRoom)
 
-    wireProvider(provider)
+    wireProviders(webrtc, ws)
     attachObservers(ydoc)
     if (trimmedName) ensureJoined()
+
+    // Poll until websocket sync completes (status events can be missed on fast joins)
+    const syncPoll = window.setInterval(() => {
+      updateNetworkReady()
+      if (networkReadyRef.value) window.clearInterval(syncPoll)
+    }, 400)
+    window.setTimeout(() => window.clearInterval(syncPoll), 15000)
   }
 
   /** Join a room you are already previewing (or connect fresh with a name). */

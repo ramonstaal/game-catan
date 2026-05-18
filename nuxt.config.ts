@@ -17,6 +17,16 @@ export default defineNuxtConfig({
       ],
     },
   },
+  runtimeConfig: {
+    public: {
+      yjsWsUrl: process.env.NUXT_PUBLIC_YJS_WS_URL || 'wss://demos.yjs.dev/ws',
+    },
+  },
+  vite: {
+    optimizeDeps: {
+      include: ['yjs', 'y-webrtc', 'y-websocket', 'y-protocols/awareness'],
+    },
+  },
   nitro: {
     preset: 'static',
     prerender: {

@@ -85,7 +85,8 @@ function colorVar(color: string | null): string {
       <p v-if="roomQuery" class="room">
         Room: <strong>{{ roomQuery }}</strong>
         <span v-if="isConnected" class="badge connected">
-          Synced{{ peerCount > 0 ? ` · ${peerCount} peer(s)` : '' }}
+          Online
+          <template v-if="peerCount > 0"> · {{ peerCount }} WebRTC peer(s)</template>
         </span>
         <span v-else class="badge">Connecting…</span>
       </p>
@@ -112,7 +113,15 @@ function colorVar(color: string | null): string {
         :host-id="hostId"
       />
 
-      <p v-if="!isConnected" class="sync-hint">Connecting to room…</p>
+      <p v-if="!isConnected" class="sync-hint">
+        Connecting to room… (syncing via game server)
+      </p>
+      <p
+        v-else-if="seatedPlayers.length === 0 && spectators.length === 0"
+        class="sync-hint"
+      >
+        Connected — no players in the lobby yet. Ask the host to join first.
+      </p>
 
       <label class="join-label">
         Your name
