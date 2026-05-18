@@ -3,6 +3,7 @@ import { WebrtcProvider } from 'y-webrtc'
 import {
   MAX_SEATS,
   MIN_PLAYERS_TO_START,
+  normalizeRoomId,
   PLAYER_COLORS,
   type GameRecord,
   type PlayerColor,
@@ -12,7 +13,12 @@ import {
 } from '~/types/p2p'
 
 const CLIENT_ID_KEY = 'catan-client-id'
-const SIGNALING_URLS = ['wss://signaling.yjs.dev']
+
+/** Public signaling servers (try several so peers find each other faster). */
+const SIGNALING_URLS = [
+  'wss://signaling.yjs.dev',
+  'wss://y-webrtc-eu.fly.dev',
+]
 
 /** Persistent browser identity for seat assignment */
 function getClientId(): string {
@@ -154,7 +160,10 @@ function assignPlayerSlot(
 const ydocRef = shallowRef<Y.Doc | null>(null)
 const providerRef = shallowRef<WebrtcProvider | null>(null)
 const roomNameRef = ref<string | null>(null)
+const displayNameRef = ref('')
 const clientIdRef = ref('')
+const peerCountRef = ref(0)
+const syncedRef = ref(false)
 const clientsSnapshot = shallowRef<PlayerRecord[]>([])
 const gameSnapshot = shallowRef<GameRecord>({
   status: 'lobby',
@@ -162,11 +171,11 @@ const gameSnapshot = shallowRef<GameRecord>({
   hostId: null,
 })
 
-let observersAttached = false
+let cleanupObservers: (() => void) | null = null
+let cleanupProviderListeners: (() => void) | null = null
 
 function attachObservers(ydoc: Y.Doc) {
-  if (observersAttached) return
-  observersAttached = true
+  cleanupObservers?.()
 
   const clientsMap = ydoc.getMap<Y.Map<unknown>>('clients')
   const gameMap = ydoc.getMap<unknown>('game')
@@ -182,20 +191,77 @@ function attachObservers(ydoc: Y.Doc) {
   gameMap.observe(refreshGame)
   refreshClients()
   refreshGame()
+
+  cleanupObservers = () => {
+    clientsMap.unobserveDeep(refreshClients)
+    gameMap.unobserve(refreshGame)
+  }
+}
+
+function ensureJoined() {
+  const ydoc = ydocRef.value
+  const clientId = clientIdRef.value
+  const name = displayNameRef.value
+  if (!ydoc || !clientId || !name) return
+
+  ydoc.transact(() => {
+    assignPlayerSlot(ydoc, clientId, name)
+  })
 }
 
 function disconnect() {
+  cleanupProviderListeners?.()
+  cleanupProviderListeners = null
+  cleanupObservers?.()
+  cleanupObservers = null
+
   providerRef.value?.destroy()
   providerRef.value = null
   ydocRef.value?.destroy()
   ydocRef.value = null
   roomNameRef.value = null
-  observersAttached = false
+  displayNameRef.value = ''
+  peerCountRef.value = 0
+  syncedRef.value = false
   clientsSnapshot.value = []
   gameSnapshot.value = {
     status: 'lobby',
     currentTurnIndex: 0,
     hostId: null,
+  }
+}
+
+function wireProvider(provider: WebrtcProvider) {
+  cleanupProviderListeners?.()
+
+  const onSynced = ({ synced }: { synced: boolean }) => {
+    syncedRef.value = synced
+    if (synced) ensureJoined()
+  }
+
+  const onPeers = ({
+    added,
+    webrtcPeers,
+  }: {
+    added: string[]
+    webrtcPeers: string[]
+  }) => {
+    peerCountRef.value = webrtcPeers.length
+    if (added.length > 0) ensureJoined()
+  }
+
+  const onStatus = ({ connected }: { connected: boolean }) => {
+    if (!connected) syncedRef.value = false
+  }
+
+  provider.on('synced', onSynced)
+  provider.on('peers', onPeers)
+  provider.on('status', onStatus)
+
+  cleanupProviderListeners = () => {
+    provider.off('synced', onSynced)
+    provider.off('peers', onPeers)
+    provider.off('status', onStatus)
   }
 }
 
@@ -243,6 +309,12 @@ export function useP2PGame() {
     () => gameSnapshot.value.currentTurnIndex,
   )
 
+  const isConnected = computed(
+    () => Boolean(providerRef.value?.connected) && syncedRef.value,
+  )
+
+  const peerCount = computed(() => peerCountRef.value)
+
   function connectRoom(roomName: string, displayName: string) {
     if (import.meta.server) return
 
@@ -250,33 +322,47 @@ export function useP2PGame() {
     const trimmedName = displayName.trim()
     if (!trimmedRoom || !trimmedName) return
 
-    if (roomNameRef.value === trimmedRoom && ydocRef.value) {
-      assignPlayerSlot(ydocRef.value, clientIdRef.value, trimmedName)
+    const p2pRoomId = normalizeRoomId(trimmedRoom)
+
+    if (
+      roomNameRef.value === p2pRoomId &&
+      ydocRef.value &&
+      providerRef.value
+    ) {
+      displayNameRef.value = trimmedName
+      ensureJoined()
       return
     }
 
     disconnect()
 
     clientIdRef.value = getClientId()
-    roomNameRef.value = trimmedRoom
+    roomNameRef.value = p2pRoomId
+    displayNameRef.value = trimmedName
 
     const ydoc = new Y.Doc()
     ydocRef.value = ydoc
 
-    const provider = new WebrtcProvider(trimmedRoom, ydoc, {
+    const provider = new WebrtcProvider(p2pRoomId, ydoc, {
       signaling: SIGNALING_URLS,
+      // Same password for everyone in this room code (helps match peers on public signaling).
+      password: p2pRoomId,
+      peerOpts: {
+        config: {
+          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        },
+      },
     })
     providerRef.value = provider
 
     const awareness = provider.awareness
     awareness.setLocalStateField('clientId', clientIdRef.value)
     awareness.setLocalStateField('name', trimmedName)
+    awareness.setLocalStateField('room', trimmedRoom)
 
+    wireProvider(provider)
     attachObservers(ydoc)
-
-    ydoc.transact(() => {
-      assignPlayerSlot(ydoc, clientIdRef.value, trimmedName)
-    })
+    ensureJoined()
   }
 
   function setReady(ready: boolean) {
@@ -342,6 +428,7 @@ export function useP2PGame() {
     gameStatus,
     hostId,
     currentTurnIndex,
-    isConnected: computed(() => Boolean(ydocRef.value)),
+    isConnected,
+    peerCount,
   }
 }

@@ -28,4 +28,14 @@ export interface SeatedPlayer extends PlayerRecord {
 }
 
 export const MAX_SEATS = 4
-export const MIN_PLAYERS_TO_START = 3
+export const MIN_PLAYERS_TO_START = 2
+
+/** Canonical P2P room id (shared by everyone who types the same room code). */
+export function normalizeRoomId(room: string): string {
+  const slug = room
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return `catan-${slug || 'lobby'}`
+}

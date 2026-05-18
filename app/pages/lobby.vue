@@ -17,6 +17,7 @@ const {
   readyCount,
   gameStatus,
   isConnected,
+  peerCount,
   hostId,
 } = useP2PGame()
 
@@ -74,7 +75,9 @@ function colorVar(color: string | null): string {
       <h1>Game lobby</h1>
       <p v-if="roomQuery" class="room">
         Room: <strong>{{ roomQuery }}</strong>
-        <span v-if="isConnected" class="badge connected">Connected</span>
+        <span v-if="isConnected" class="badge connected">
+          Synced{{ peerCount > 0 ? ` · ${peerCount} peer(s)` : '' }}
+        </span>
         <span v-else class="badge">Connecting…</span>
       </p>
       <p v-else class="warn">
