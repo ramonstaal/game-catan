@@ -1,5 +1,5 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 export default defineNuxtConfig({
@@ -37,9 +37,11 @@ export default defineNuxtConfig({
   hooks: {
     'nitro:init'(nitro) {
       // GitHub Pages runs Jekyll; without this, `_nuxt/` assets are stripped (blank page).
+      // Guard with existsSync so `nuxt prepare` (run during postinstall) doesn't fail
+      // when the output directory hasn't been created yet.
       nitro.hooks.hook('close', () => {
         const publicDir = nitro.options.output.publicDir
-        if (publicDir) {
+        if (publicDir && existsSync(publicDir)) {
           writeFileSync(resolve(publicDir, '.nojekyll'), '')
         }
       })
