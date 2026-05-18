@@ -1,45 +1,30 @@
 <script setup lang="ts">
 import type { SeatedPlayer } from '~/types/p2p'
+import type { BoardSize } from '~/utils/boardGenerator'
+import { generateBoard, hexPolygonPoints, tileImageUrl } from '~/utils/boardGenerator'
 
 const props = defineProps<{
   players: SeatedPlayer[]
   currentTurnIndex: number
+  boardSize: BoardSize
+  boardSeed: number
 }>()
 
 const emit = defineEmits<{
   advanceTurn: []
 }>()
 
-/** Hex tile types for demo board */
-const tiles = [
-  { id: 0, type: 'forest', number: 4 },
-  { id: 1, type: 'pasture', number: 5 },
-  { id: 2, type: 'fields', number: 6 },
-  { id: 3, type: 'hills', number: 8 },
-  { id: 4, type: 'mountains', number: 9 },
-  { id: 5, type: 'desert', number: null },
-  { id: 6, type: 'forest', number: 10 },
-]
+const board = computed(() => generateBoard(props.boardSize, props.boardSeed))
 
-const tileColors: Record<string, string> = {
-  forest: '#2d6a4f',
-  pasture: '#95d5b2',
-  fields: '#f4d35e',
-  hills: '#bc6c25',
-  mountains: '#6c757d',
-  desert: '#e9c46a',
+/** Number tokens with colour: 6 and 8 are red (high probability) */
+function tokenColor(n: number): string {
+  return n === 6 || n === 8 ? '#c0392b' : '#1a2332'
 }
 
-/** Axial-ish layout for 7 hexes (simplified Catan island) */
-const hexPositions = [
-  { x: 200, y: 80 },
-  { x: 290, y: 130 },
-  { x: 290, y: 230 },
-  { x: 200, y: 280 },
-  { x: 110, y: 230 },
-  { x: 110, y: 130 },
-  { x: 200, y: 180 },
-]
+function tokenDots(n: number): string {
+  const pips: Record<number, number> = { 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1 }
+  return '•'.repeat(pips[n] ?? 0)
+}
 
 function colorCss(color: string): string {
   const map: Record<string, string> = {
@@ -51,21 +36,8 @@ function colorCss(color: string): string {
   return map[color] ?? 'var(--muted)'
 }
 
-/** Demo resources per player (display scaffold; game logic can sync later) */
-const demoResources = computed(() =>
-  props.players.map((p, i) => ({
-    player: p,
-    wood: 2 + i,
-    brick: 1 + (i % 2),
-    sheep: 2,
-    wheat: 1,
-    ore: i,
-    vp: 2 + (i % 3),
-  })),
-)
-
 const panelColumns = computed(() =>
-  props.players.length === 3 ? '1fr 1fr 1fr' : '1fr 1fr 1fr 1fr',
+  props.players.length <= 2 ? '1fr 1fr' : props.players.length === 3 ? '1fr 1fr 1fr' : '1fr 1fr 1fr 1fr',
 )
 </script>
 
@@ -73,32 +45,19 @@ const panelColumns = computed(() =>
   <div class="game-board">
     <aside class="sidebar">
       <h2>Players</h2>
-      <div
-        class="scorecards"
-        :style="{ gridTemplateColumns: panelColumns }"
-      >
+
+      <div class="scorecards" :style="{ gridTemplateColumns: panelColumns }">
         <div
-          v-for="(row, index) in demoResources"
-          :key="row.player.id"
+          v-for="(player, index) in players"
+          :key="player.id"
           class="scorecard"
           :class="{ active: index === currentTurnIndex }"
         >
           <div class="score-header">
-            <span
-              class="pip"
-              :style="{ background: colorCss(row.player.color) }"
-            />
-            <strong>{{ row.player.name }}</strong>
+            <span class="pip" :style="{ background: colorCss(player.color) }" />
+            <strong class="player-name">{{ player.name }}</strong>
           </div>
           <span v-if="index === currentTurnIndex" class="turn-badge">Turn</span>
-          <dl class="resources">
-            <div><dt>Wood</dt><dd>{{ row.wood }}</dd></div>
-            <div><dt>Brick</dt><dd>{{ row.brick }}</dd></div>
-            <div><dt>Sheep</dt><dd>{{ row.sheep }}</dd></div>
-            <div><dt>Wheat</dt><dd>{{ row.wheat }}</dd></div>
-            <div><dt>Ore</dt><dd>{{ row.ore }}</dd></div>
-            <div><dt>VP</dt><dd>{{ row.vp }}</dd></div>
-          </dl>
         </div>
       </div>
 
@@ -108,59 +67,106 @@ const panelColumns = computed(() =>
         class="next-turn"
         @click="emit('advanceTurn')"
       >
-        Next turn
+        End turn
       </button>
 
       <p class="player-count">
         {{ players.length }} player{{ players.length === 1 ? '' : 's' }} in game
       </p>
+
+      <div class="legend">
+        <h3>Terrain</h3>
+        <ul class="legend-list">
+          <li><span class="legend-swatch forest" />Forest — Lumber</li>
+          <li><span class="legend-swatch pasture" />Pasture — Wool</li>
+          <li><span class="legend-swatch fields" />Fields — Grain</li>
+          <li><span class="legend-swatch hills" />Hills — Brick</li>
+          <li><span class="legend-swatch mountains" />Mountains — Ore</li>
+          <li><span class="legend-swatch desert" />Desert</li>
+        </ul>
+      </div>
     </aside>
 
     <div class="board-wrap">
       <svg
-        viewBox="0 0 400 360"
+        :viewBox="board.viewBox"
         class="board-svg"
         role="img"
         aria-label="Catan board"
       >
+        <!-- Clip paths — one per hex tile -->
         <defs>
-          <polygon
-            id="hex"
-            points="0,-36 31,-18 31,18 0,36 -31,18 -31,-18"
-          />
+          <clipPath
+            v-for="tile in board.tiles"
+            :id="`clip-${tile.id}`"
+            :key="`cp-${tile.id}`"
+          >
+            <polygon :points="hexPolygonPoints(tile.x, tile.y, board.hexSize)" />
+          </clipPath>
         </defs>
+
+        <!-- Tile images (clipped to hex shape) -->
+        <image
+          v-for="tile in board.tiles"
+          :key="`img-${tile.id}`"
+          :href="tileImageUrl(tile.type)"
+          :x="tile.x - board.hexSize"
+          :y="tile.y - board.hexSize * 0.866"
+          :width="board.hexSize * 2"
+          :height="board.hexSize * 1.732"
+          :clip-path="`url(#clip-${tile.id})`"
+          preserveAspectRatio="xMidYMid slice"
+        />
+
+        <!-- Hex borders -->
+        <polygon
+          v-for="tile in board.tiles"
+          :key="`border-${tile.id}`"
+          :points="hexPolygonPoints(tile.x, tile.y, board.hexSize)"
+          fill="none"
+          stroke="rgba(0,0,0,0.35)"
+          :stroke-width="board.hexSize * 0.04"
+        />
+
+        <!-- Number tokens -->
         <g
-          v-for="(tile, i) in tiles"
-          :key="tile.id"
-          :transform="`translate(${hexPositions[i]!.x}, ${hexPositions[i]!.y})`"
+          v-for="tile in board.tiles.filter(t => t.number !== null)"
+          :key="`token-${tile.id}`"
         >
-          <use
-            href="#hex"
-            :fill="tileColors[tile.type]"
-            stroke="#1a2332"
-            stroke-width="2"
+          <!-- Token circle -->
+          <circle
+            :cx="tile.x"
+            :cy="tile.y"
+            :r="board.hexSize * 0.28"
+            fill="#f5efe0"
+            stroke="#8b7355"
+            :stroke-width="board.hexSize * 0.03"
           />
+          <!-- Number -->
           <text
-            v-if="tile.number !== null"
+            :x="tile.x"
+            :y="tile.y - board.hexSize * 0.04"
             text-anchor="middle"
-            dy="0.35em"
-            font-size="14"
+            dominant-baseline="middle"
+            :font-size="board.hexSize * 0.24"
             font-weight="700"
-            fill="#1a2332"
+            :fill="tokenColor(tile.number!)"
           >
             {{ tile.number }}
           </text>
+          <!-- Probability dots -->
+          <text
+            :x="tile.x"
+            :y="tile.y + board.hexSize * 0.14"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            :font-size="board.hexSize * 0.1"
+            :fill="tokenColor(tile.number!)"
+            opacity="0.8"
+          >
+            {{ tokenDots(tile.number!) }}
+          </text>
         </g>
-        <circle
-          v-for="(player, i) in players"
-          :key="player.id"
-          :cx="60 + i * (280 / Math.max(players.length - 1, 1))"
-          :cy="340"
-          r="10"
-          :fill="colorCss(player.color)"
-          stroke="#fff"
-          stroke-width="2"
-        />
       </svg>
     </div>
   </div>
@@ -169,7 +175,7 @@ const panelColumns = computed(() =>
 <style scoped>
 .game-board {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) 1fr;
+  grid-template-columns: minmax(200px, 260px) 1fr;
   gap: 1.5rem;
   min-height: calc(100vh - 4rem);
   padding: 1.5rem;
@@ -188,12 +194,12 @@ const panelColumns = computed(() =>
 
 .scorecards {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.6rem;
   margin-bottom: 1rem;
 }
 
 .scorecard {
-  padding: 0.75rem;
+  padding: 0.65rem 0.75rem;
   background: var(--surface);
   border: 2px solid var(--border);
   border-radius: 10px;
@@ -209,18 +215,25 @@ const panelColumns = computed(() =>
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.25rem;
 }
 
 .pip {
   width: 10px;
   height: 10px;
   border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.player-name {
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .turn-badge {
   display: inline-block;
-  margin-bottom: 0.5rem;
   padding: 0.1rem 0.4rem;
   font-size: 0.7rem;
   font-weight: 600;
@@ -228,28 +241,6 @@ const panelColumns = computed(() =>
   background: var(--accent);
   color: #1a2332;
   border-radius: 4px;
-}
-
-.resources {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.25rem 0.5rem;
-  margin: 0;
-  font-size: 0.8rem;
-}
-
-.resources div {
-  display: flex;
-  justify-content: space-between;
-}
-
-.resources dt {
-  color: var(--muted);
-}
-
-.resources dd {
-  margin: 0;
-  font-weight: 600;
 }
 
 .next-turn {
@@ -260,6 +251,7 @@ const panelColumns = computed(() =>
   border-radius: 8px;
   background: var(--surface);
   color: var(--text);
+  transition: border-color 0.15s;
 }
 
 .next-turn:hover {
@@ -267,24 +259,71 @@ const panelColumns = computed(() =>
 }
 
 .player-count {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--muted);
-  margin: 0;
+  margin: 0 0 1.25rem;
 }
+
+.legend {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.legend h3 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 0 0 0.6rem;
+}
+
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-swatch.forest    { background: #2d6a4f; }
+.legend-swatch.pasture   { background: #95d5b2; }
+.legend-swatch.fields    { background: #f4d35e; }
+.legend-swatch.hills     { background: #bc6c25; }
+.legend-swatch.mountains { background: #6c757d; }
+.legend-swatch.desert    { background: #e9c46a; }
 
 .board-wrap {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface);
+  background: #1b6ca8;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 16px;
   padding: 1rem;
+  min-height: 400px;
 }
 
 .board-svg {
   width: 100%;
-  max-width: 520px;
+  max-width: 680px;
   height: auto;
+  filter: drop-shadow(0 4px 12px rgba(0,0,0,0.4));
 }
 </style>

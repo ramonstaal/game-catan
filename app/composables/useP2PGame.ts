@@ -7,6 +7,7 @@ import {
   MIN_PLAYERS_TO_START,
   normalizeRoomId,
   PLAYER_COLORS,
+  type BoardSize,
   type GameRecord,
   type PlayerColor,
   type PlayerRecord,
@@ -79,6 +80,8 @@ function snapshotGame(gameMap: Y.Map<unknown>): GameRecord {
     status: (gameMap.get('status') as RoomStatus) ?? 'lobby',
     currentTurnIndex: (gameMap.get('currentTurnIndex') as number) ?? 0,
     hostId: (gameMap.get('hostId') as string | null) ?? null,
+    boardSize: (gameMap.get('boardSize') as BoardSize) ?? 'standard',
+    boardSeed: (gameMap.get('boardSeed') as number) ?? 0,
   }
 }
 
@@ -181,6 +184,8 @@ const gameSnapshot = shallowRef<GameRecord>({
   status: 'lobby',
   currentTurnIndex: 0,
   hostId: null,
+  boardSize: 'standard',
+  boardSeed: 0,
 })
 
 let cleanupObservers: (() => void) | null = null
@@ -268,6 +273,8 @@ function disconnect() {
     status: 'lobby',
     currentTurnIndex: 0,
     hostId: null,
+    boardSize: 'standard',
+    boardSeed: 0,
   }
 }
 
@@ -376,9 +383,9 @@ export function useP2PGame() {
 
   const gameStatus = computed(() => gameSnapshot.value.status)
   const hostId = computed(() => gameSnapshot.value.hostId)
-  const currentTurnIndex = computed(
-    () => gameSnapshot.value.currentTurnIndex,
-  )
+  const currentTurnIndex = computed(() => gameSnapshot.value.currentTurnIndex)
+  const boardSize = computed(() => gameSnapshot.value.boardSize)
+  const boardSeed = computed(() => gameSnapshot.value.boardSeed)
 
   const isConnected = computed(
     () =>
@@ -493,14 +500,17 @@ export function useP2PGame() {
     })
   }
 
-  function startGame() {
+  function startGame(boardSize: BoardSize = 'standard') {
     const ydoc = ydocRef.value
     if (!ydoc || !canStart.value) return
 
+    const seed = Math.floor(Math.random() * 0xffffffff)
     ydoc.transact(() => {
       const gameMap = ydoc.getMap<unknown>('game')
       gameMap.set('status', 'playing')
       gameMap.set('currentTurnIndex', 0)
+      gameMap.set('boardSize', boardSize)
+      gameMap.set('boardSeed', seed)
     })
   }
 
@@ -541,6 +551,8 @@ export function useP2PGame() {
     gameStatus,
     hostId,
     currentTurnIndex,
+    boardSize,
+    boardSeed,
     isConnected,
     peerCount,
     hasJoined,

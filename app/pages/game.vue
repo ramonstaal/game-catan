@@ -12,6 +12,8 @@ const {
   advanceTurn,
   me,
   isConnected,
+  boardSize,
+  boardSeed,
 } = useP2PGame()
 
 onMounted(() => {
@@ -59,6 +61,8 @@ watch([gameStatus, isConnected], ([status, connected]) => {
     <GameBoard
       :players="seatedPlayers"
       :current-turn-index="currentTurnIndex"
+      :board-size="boardSize"
+      :board-seed="boardSeed"
       @advance-turn="advanceTurn"
     />
 

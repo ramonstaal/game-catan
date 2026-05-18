@@ -4,11 +4,21 @@ export type PlayerColor = (typeof PLAYER_COLORS)[number]
 
 export type RoomStatus = 'lobby' | 'playing'
 
+export type BoardSize = 'small' | 'standard' | 'large'
+
+export const BOARD_SIZE_LABELS: Record<BoardSize, string> = {
+  small: 'Small (7 hexes)',
+  standard: 'Standard (19 hexes)',
+  large: 'Large (37 hexes)',
+}
+
 /** Shared game map fields in Y.Doc */
 export interface GameRecord {
   status: RoomStatus
   currentTurnIndex: number
   hostId: string | null
+  boardSize: BoardSize
+  boardSeed: number
 }
 
 /** Per-client record in Y.Map clients */

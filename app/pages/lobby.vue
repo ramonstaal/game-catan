@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MIN_PLAYERS_TO_START } from '~/types/p2p'
+import { MIN_PLAYERS_TO_START, BOARD_SIZE_LABELS, type BoardSize } from '~/types/p2p'
 
 const route = useRoute()
 const roomQuery = computed(() => String(route.query.room ?? '').trim())
@@ -31,6 +31,7 @@ const localReady = computed({
 })
 
 const joinName = ref('')
+const selectedBoardSize = ref<BoardSize>('standard')
 
 function enterLobbyWithName() {
   const n = joinName.value.trim()
@@ -184,12 +185,28 @@ function colorVar(color: string | null): string {
         ({{ readyCount }} / {{ MIN_PLAYERS_TO_START }} ready)
       </p>
 
+      <div v-if="isHost" class="board-size-picker">
+        <p class="picker-label">Board size</p>
+        <div class="size-buttons">
+          <button
+            v-for="(label, key) in BOARD_SIZE_LABELS"
+            :key="key"
+            type="button"
+            class="size-btn"
+            :class="{ active: selectedBoardSize === key }"
+            @click="selectedBoardSize = key as BoardSize"
+          >
+            {{ label }}
+          </button>
+        </div>
+      </div>
+
       <button
         v-if="isHost"
         type="button"
         class="start"
         :disabled="!canStart"
-        @click="startGame"
+        @click="startGame(selectedBoardSize)"
       >
         Start game
       </button>
@@ -441,5 +458,45 @@ header h1 {
 
 .invite-panel .roster {
   margin-bottom: 1rem;
+}
+
+.board-size-picker {
+  margin-bottom: 1rem;
+}
+
+.picker-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 0.5rem;
+}
+
+.size-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.size-btn {
+  flex: 1;
+  padding: 0.45rem 0.5rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.size-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.size-btn:hover:not(.active) {
+  border-color: var(--text);
+  color: var(--text);
 }
 </style>
