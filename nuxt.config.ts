@@ -1,4 +1,7 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
+import { writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 export default defineNuxtConfig({
   compatibilityDate: '2025-05-18',
   srcDir: 'app',
@@ -18,6 +21,17 @@ export default defineNuxtConfig({
     preset: 'static',
     prerender: {
       routes: ['/lobby', '/game'],
+    },
+  },
+  hooks: {
+    'nitro:init'(nitro) {
+      // GitHub Pages runs Jekyll; without this, `_nuxt/` assets are stripped (blank page).
+      nitro.hooks.hook('close', () => {
+        const publicDir = nitro.options.output.publicDir
+        if (publicDir) {
+          writeFileSync(resolve(publicDir, '.nojekyll'), '')
+        }
+      })
     },
   },
 })

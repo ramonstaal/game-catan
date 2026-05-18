@@ -25,6 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: NUXT_APP_BASE_URL=/game-catan/ npm run generate
+      - run: touch .output/public/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .output/public
