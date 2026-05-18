@@ -1,32 +1,65 @@
 # Settlers of Catan (P2P)
 
-Serverless multiplayer Catan prototype using **Nuxt 4** (SPA / static), **Yjs**, and **y-webrtc** with `wss://signaling.yjs.dev`.
-
-## Develop
-
-```bash
-npm install
-npm run dev
-```
-
-Nuxt is pinned to **3.21.2** because 3.21.3+ breaks `npm run dev` with `ssr: false` (vite-node IPC error; see [nuxt/nuxt#34957](https://github.com/nuxt/nuxt/issues/34957)). Remove the pin once you upgrade to a Nuxt release that includes the fix.
+Serverless multiplayer Catan prototype using **Nuxt**, **Yjs**, **WebRTC**, and an optional **WebSocket sync server**.
 
 ## Live site
 
 **https://ramonstaal.github.io/game-catan/**
 
-Pushes to `main` deploy automatically via GitHub Actions (`.github/workflows/deploy.yml`).
+## Why you need a sync server
 
-## Static build (GitHub Pages)
+The public Yjs demo server (`demos.yjs.dev`) is **often down** (504). GitHub Pages can only host static files, so **room state must sync through a small WebSocket server** you deploy once (free on Render).
+
+Without it, players usually **cannot see each other** across phones/networks.
+
+## 1. Deploy sync server (one-time, ~5 min)
+
+### Option A — Render (recommended, free)
+
+1. Push this repo to GitHub.
+2. Open [Render Blueprint](https://render.com/docs/blueprint-spec) → **New Blueprint** → connect repo.
+3. Render deploys `sync-server` from [`render.yaml`](render.yaml).
+4. Copy your service URL, e.g. `https://game-catan-sync.onrender.com`.
+
+### Option B — Local (testing)
 
 ```bash
-NUXT_APP_BASE_URL=/game-catan/ npm run generate
+npm run sync-server
+# runs on ws://localhost:1234
 ```
 
-Deploy the `.output/public` folder, or push to `main` and let CI deploy.
+## 2. Build the game with your sync URL
+
+```bash
+NUXT_PUBLIC_YJS_WS_URL=wss://YOUR-SYNC-HOST.onrender.com npm run generate
+```
+
+Deploy `.output/public` to GitHub Pages (or push to `main` if CI is wired).
+
+For local dev:
+
+```bash
+NUXT_PUBLIC_YJS_WS_URL=ws://localhost:1234 npm run dev
+```
+
+## Develop
+
+```bash
+npm install
+NUXT_PUBLIC_YJS_WS_URL=ws://localhost:1234 npm run dev   # terminal 1
+npm run sync-server                                     # terminal 2
+```
+
+Nuxt is pinned to **3.21.2** (see [nuxt/nuxt#34957](https://github.com/nuxt/nuxt/issues/34957)).
 
 ## Flow
 
-1. **Home** — enter name and room code.
-2. **Lobby** — up to 4 seated players (colors assigned in order); extra joins are spectators. Host starts when ≥3 players are ready.
-3. **Game** — board and scorecards for 3–4 seated players; turn index synced via Yjs.
+1. **Home** — create room + name, or open invite link.
+2. **Lobby** — invite links go to `/lobby?room=CODE` (room fixed, enter name only).
+3. **Game** — host starts when ≥2 players are ready.
+
+## Invite links
+
+Share from the lobby; links look like:
+
+`https://ramonstaal.github.io/game-catan/lobby?room=your-code`

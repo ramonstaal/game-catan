@@ -19,7 +19,8 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     public: {
-      yjsWsUrl: process.env.NUXT_PUBLIC_YJS_WS_URL || 'wss://demos.yjs.dev/ws',
+      // Set after deploying sync-server (see README). demos.yjs.dev is often down (504).
+      yjsWsUrl: process.env.NUXT_PUBLIC_YJS_WS_URL || '',
     },
   },
   vite: {

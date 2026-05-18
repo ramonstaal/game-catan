@@ -16,13 +16,31 @@ import {
 
 const CLIENT_ID_KEY = 'catan-client-id'
 
-/** Public signaling servers for optional WebRTC mesh. */
 const SIGNALING_URLS = [
   'wss://signaling.yjs.dev',
   'wss://y-webrtc-eu.fly.dev',
 ]
 
-/** Persistent browser identity for seat assignment */
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+]
+
 function getClientId(): string {
   if (import.meta.server) return ''
   let id = localStorage.getItem(CLIENT_ID_KEY)
@@ -64,7 +82,6 @@ function snapshotGame(gameMap: Y.Map<unknown>): GameRecord {
   }
 }
 
-/** Smallest seat index 0..3 not taken by another seated client */
 function nextFreeSeat(
   clientsMap: Y.Map<Y.Map<unknown>>,
   excludeId: string,
@@ -81,7 +98,6 @@ function nextFreeSeat(
   return null
 }
 
-/** Reassign host to lowest seated seat if current host is absent or spectating */
 function reconcileHost(
   gameMap: Y.Map<unknown>,
   clientsMap: Y.Map<Y.Map<unknown>>,
@@ -103,10 +119,6 @@ function reconcileHost(
   }
 }
 
-/**
- * Assign or refresh this client's seat: seated (0–3) or spectator (-1).
- * Runs inside a Yjs transaction for atomic updates.
- */
 function assignPlayerSlot(
   ydoc: Y.Doc,
   clientId: string,
@@ -130,11 +142,7 @@ function assignPlayerSlot(
 
   if (seatIndex < 0 || seatIndex >= MAX_SEATS) {
     const free = nextFreeSeat(clientsMap, clientId)
-    if (free !== null) {
-      seatIndex = free
-    } else {
-      seatIndex = -1
-    }
+    seatIndex = free !== null ? free : -1
   }
 
   entry.set('seatIndex', seatIndex)
@@ -158,7 +166,6 @@ function assignPlayerSlot(
   reconcileHost(gameMap, clientsMap)
 }
 
-// Singleton connection state shared across pages in the same session
 const ydocRef = shallowRef<Y.Doc | null>(null)
 const webrtcProviderRef = shallowRef<WebrtcProvider | null>(null)
 const wsProviderRef = shallowRef<WebsocketProvider | null>(null)
@@ -166,7 +173,9 @@ const roomNameRef = ref<string | null>(null)
 const displayNameRef = ref('')
 const clientIdRef = ref('')
 const peerCountRef = ref(0)
-const networkReadyRef = ref(false)
+const wsReadyRef = ref(false)
+const webrtcReadyRef = ref(false)
+const connectionErrorRef = ref<string | null>(null)
 const clientsSnapshot = shallowRef<PlayerRecord[]>([])
 const gameSnapshot = shallowRef<GameRecord>({
   status: 'lobby',
@@ -176,13 +185,25 @@ const gameSnapshot = shallowRef<GameRecord>({
 
 let cleanupObservers: (() => void) | null = null
 let cleanupProviderListeners: (() => void) | null = null
+let syncPollTimer: ReturnType<typeof setInterval> | null = null
+let syncPollTimeout: ReturnType<typeof setTimeout> | null = null
+
+function clearSyncPoll() {
+  if (syncPollTimer) clearInterval(syncPollTimer)
+  if (syncPollTimeout) clearTimeout(syncPollTimeout)
+  syncPollTimer = null
+  syncPollTimeout = null
+}
 
 function updateNetworkReady() {
   const ws = wsProviderRef.value
-  const wsReady = Boolean(ws?.wsconnected && ws.synced)
+  wsReadyRef.value = Boolean(ws?.wsconnected && ws.synced)
   const rtc = webrtcProviderRef.value
-  const rtcReady = Boolean(rtc?.connected)
-  networkReadyRef.value = wsReady || rtcReady
+  webrtcReadyRef.value = Boolean(rtc?.connected)
+}
+
+function hasRemotePlayers(): boolean {
+  return clientsSnapshot.value.some((p) => p.id !== clientIdRef.value)
 }
 
 function attachObservers(ydoc: Y.Doc) {
@@ -193,6 +214,9 @@ function attachObservers(ydoc: Y.Doc) {
 
   const refreshClients = () => {
     clientsSnapshot.value = snapshotClients(clientsMap)
+    if (hasRemotePlayers()) {
+      connectionErrorRef.value = null
+    }
   }
   const refreshGame = () => {
     gameSnapshot.value = snapshotGame(gameMap)
@@ -221,6 +245,7 @@ function ensureJoined() {
 }
 
 function disconnect() {
+  clearSyncPoll()
   cleanupProviderListeners?.()
   cleanupProviderListeners = null
   cleanupObservers?.()
@@ -235,7 +260,9 @@ function disconnect() {
   roomNameRef.value = null
   displayNameRef.value = ''
   peerCountRef.value = 0
-  networkReadyRef.value = false
+  wsReadyRef.value = false
+  webrtcReadyRef.value = false
+  connectionErrorRef.value = null
   clientsSnapshot.value = []
   gameSnapshot.value = {
     status: 'lobby',
@@ -244,12 +271,10 @@ function disconnect() {
   }
 }
 
-function wireProviders(webrtc: WebrtcProvider, ws: WebsocketProvider) {
+function wireProviders(webrtc: WebrtcProvider, ws: WebsocketProvider | null) {
   cleanupProviderListeners?.()
 
-  const onWebrtcSynced = ({ synced }: { synced: boolean }) => {
-    if (synced) updateNetworkReady()
-  }
+  const onWebrtcSynced = () => updateNetworkReady()
 
   const onPeers = ({
     added,
@@ -260,6 +285,7 @@ function wireProviders(webrtc: WebrtcProvider, ws: WebsocketProvider) {
   }) => {
     peerCountRef.value = webrtcPeers.length
     if (added.length > 0 && displayNameRef.value.trim()) ensureJoined()
+    updateNetworkReady()
   }
 
   const onWebrtcStatus = ({ connected }: { connected: boolean }) => {
@@ -272,32 +298,46 @@ function wireProviders(webrtc: WebrtcProvider, ws: WebsocketProvider) {
   }: {
     status: 'connected' | 'disconnected' | 'connecting'
   }) => {
-    if (status !== 'connected') networkReadyRef.value = false
+    if (status === 'connected') {
+      connectionErrorRef.value = null
+    }
     updateNetworkReady()
   }
 
   const onWsSync = (isSynced: boolean) => {
-    if (isSynced) updateNetworkReady()
+    if (isSynced) connectionErrorRef.value = null
+    updateNetworkReady()
+  }
+
+  const onWsError = () => {
+    connectionErrorRef.value =
+      'Could not reach the game sync server. Deploy sync-server (see README) or use WebRTC-only on the same network.'
   }
 
   webrtc.on('synced', onWebrtcSynced)
   webrtc.on('peers', onPeers)
   webrtc.on('status', onWebrtcStatus)
-  ws.on('status', onWsStatus)
-  ws.on('sync', onWsSync)
+
+  if (ws) {
+    ws.on('status', onWsStatus)
+    ws.on('sync', onWsSync)
+    ws.on('connection-error', onWsError)
+  }
 
   cleanupProviderListeners = () => {
     webrtc.off('synced', onWebrtcSynced)
     webrtc.off('peers', onPeers)
     webrtc.off('status', onWebrtcStatus)
-    ws.off('status', onWsStatus)
-    ws.off('sync', onWsSync)
+    if (ws) {
+      ws.off('status', onWsStatus)
+      ws.off('sync', onWsSync)
+      ws.off('connection-error', onWsError)
+    }
   }
 }
 
 export function useP2PGame() {
   const config = useRuntimeConfig()
-  const clientId = computed(() => clientIdRef.value)
 
   const seatedPlayers = computed((): SeatedPlayer[] =>
     clientsSnapshot.value
@@ -340,13 +380,18 @@ export function useP2PGame() {
     () => gameSnapshot.value.currentTurnIndex,
   )
 
-  const isConnected = computed(() => networkReadyRef.value)
+  const isConnected = computed(
+    () =>
+      wsReadyRef.value ||
+      webrtcReadyRef.value ||
+      hasRemotePlayers() ||
+      peerCountRef.value > 0,
+  )
 
   const peerCount = computed(() => peerCountRef.value)
-
   const hasJoined = computed(() => Boolean(displayNameRef.value.trim()))
+  const connectionError = computed(() => connectionErrorRef.value)
 
-  /** Connect to a room. Omit displayName (or pass "") to preview players without joining. */
   function connectRoom(roomName: string, displayName = '') {
     if (import.meta.server) return
 
@@ -359,12 +404,13 @@ export function useP2PGame() {
     if (
       roomNameRef.value === p2pRoomId &&
       ydocRef.value &&
-      webrtcProviderRef.value &&
-      wsProviderRef.value
+      webrtcProviderRef.value
     ) {
       displayNameRef.value = trimmedName
-      const awareness = webrtcProviderRef.value.awareness
-      awareness.setLocalStateField('name', trimmedName || undefined)
+      webrtcProviderRef.value.awareness.setLocalStateField(
+        'name',
+        trimmedName || undefined,
+      )
       if (trimmedName) ensureJoined()
       return
     }
@@ -374,29 +420,30 @@ export function useP2PGame() {
     clientIdRef.value = getClientId()
     roomNameRef.value = p2pRoomId
     displayNameRef.value = trimmedName
+    connectionErrorRef.value = null
 
     const ydoc = new Y.Doc()
     ydocRef.value = ydoc
     const awareness = new Awareness(ydoc)
 
-    const wsUrl = config.public.yjsWsUrl as string
-    const ws = new WebsocketProvider(wsUrl, p2pRoomId, ydoc, {
-      awareness,
-      connect: true,
-    })
-    wsProviderRef.value = ws
+    const wsUrl = (config.public.yjsWsUrl as string)?.trim()
+    let ws: WebsocketProvider | null = null
+    if (wsUrl) {
+      ws = new WebsocketProvider(wsUrl, p2pRoomId, ydoc, { awareness })
+      wsProviderRef.value = ws
+    } else {
+      wsProviderRef.value = null
+      connectionErrorRef.value =
+        'No sync server configured — trying peer-to-peer only. For reliable play across phones, deploy sync-server (see README).'
+    }
 
     const webrtc = new WebrtcProvider(p2pRoomId, ydoc, {
       awareness,
       signaling: SIGNALING_URLS,
       password: p2pRoomId,
+      maxConns: 4,
       peerOpts: {
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-          ],
-        },
+        config: { iceServers: ICE_SERVERS },
       },
     })
     webrtcProviderRef.value = webrtc
@@ -409,15 +456,25 @@ export function useP2PGame() {
     attachObservers(ydoc)
     if (trimmedName) ensureJoined()
 
-    // Poll until websocket sync completes (status events can be missed on fast joins)
-    const syncPoll = window.setInterval(() => {
+    clearSyncPoll()
+    syncPollTimer = setInterval(updateNetworkReady, 500)
+    syncPollTimeout = setTimeout(() => {
       updateNetworkReady()
-      if (networkReadyRef.value) window.clearInterval(syncPoll)
-    }, 400)
-    window.setTimeout(() => window.clearInterval(syncPoll), 15000)
+      if (
+        !wsReadyRef.value &&
+        !webrtcReadyRef.value &&
+        !hasRemotePlayers() &&
+        peerCountRef.value === 0
+      ) {
+        if (ws && !ws.wsconnected) {
+          connectionErrorRef.value =
+            'Sync server unreachable. Deploy sync-server on Render and set NUXT_PUBLIC_YJS_WS_URL when building.'
+        }
+      }
+      clearSyncPoll()
+    }, 12000)
   }
 
-  /** Join a room you are already previewing (or connect fresh with a name). */
   function joinRoom(roomName: string, displayName: string) {
     connectRoom(roomName, displayName)
   }
@@ -463,9 +520,7 @@ export function useP2PGame() {
     setCurrentTurnIndex(currentTurnIndex.value + 1)
   }
 
-  onBeforeUnmount(() => {
-    // Keep connection alive when navigating lobby <-> game
-  })
+  onBeforeUnmount(() => {})
 
   return {
     connectRoom,
@@ -475,7 +530,7 @@ export function useP2PGame() {
     startGame,
     setCurrentTurnIndex,
     advanceTurn,
-    clientId,
+    clientId: computed(() => clientIdRef.value),
     roomName: readonly(roomNameRef),
     seatedPlayers,
     spectators,
@@ -489,5 +544,6 @@ export function useP2PGame() {
     isConnected,
     peerCount,
     hasJoined,
+    connectionError,
   }
 }

@@ -1,0 +1,13 @@
+# Deploy sync-server to Render (free tier): https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: game-catan-sync
+    runtime: node
+    rootDir: sync-server
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

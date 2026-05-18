@@ -24,7 +24,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: NUXT_APP_BASE_URL=/game-catan/ npm run generate
+      - run: NUXT_APP_BASE_URL=/game-catan/ NUXT_PUBLIC_YJS_WS_URL=${{ secrets.YJS_WS_URL }} npm run generate
       - run: touch .output/public/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:

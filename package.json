@@ -6,6 +6,7 @@
     "build": "nuxt build",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
+    "sync-server": "npm --prefix sync-server start",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@nuxt/devtools": "^2.3.0",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "ws": "^8.20.1"
   }
 }

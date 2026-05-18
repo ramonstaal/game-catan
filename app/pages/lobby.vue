@@ -20,6 +20,7 @@ const {
   isConnected,
   peerCount,
   hostId,
+  connectionError,
 } = useP2PGame()
 
 const isInviteJoin = computed(() => Boolean(roomQuery.value && !nameQuery.value))
@@ -113,14 +114,17 @@ function colorVar(color: string | null): string {
         :host-id="hostId"
       />
 
-      <p v-if="!isConnected" class="sync-hint">
-        Connecting to room… (syncing via game server)
+      <p v-if="connectionError" class="sync-error">
+        {{ connectionError }}
+      </p>
+      <p v-else-if="!isConnected" class="sync-hint">
+        Connecting to room…
       </p>
       <p
         v-else-if="seatedPlayers.length === 0 && spectators.length === 0"
         class="sync-hint"
       >
-        Connected — no players in the lobby yet. Ask the host to join first.
+        Connected — waiting for the host to join this room.
       </p>
 
       <label class="join-label">
@@ -422,6 +426,17 @@ header h1 {
   margin: 0 0 1rem;
   font-size: 0.85rem;
   color: var(--muted);
+}
+
+.sync-error {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: #ffb4a2;
+  background: rgba(192, 57, 43, 0.15);
+  border: 1px solid rgba(192, 57, 43, 0.4);
+  border-radius: 8px;
 }
 
 .invite-panel .roster {
